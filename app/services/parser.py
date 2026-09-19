@@ -14,9 +14,8 @@ import os # For file path operations
 import logging # For logging errors and information
 from typing import BinaryIO # For type hinting binary file-like objects
 
-from annotated_doc import Doc
 import pdfplumber # For extracting text from PDF files
-from docx import Document, table # For extracting text from DOCX files
+from docx import Document # For extracting text from DOCX files
 
 # For better MIME (Multipurpose Internet Mail Extensions) type detection
 # (falls back to file extension if not installed)
@@ -209,5 +208,5 @@ def extract_text_from_bytes(file_bytes: bytes, filename: str) -> str:
         return extract_text_from_docx(file_bytes)
     else:
         raise ValueError(f"Unsupported or unrecognized file type. only PDF and DOCX are allowed."
-                         f"Received: {filename if filename else "unknown"}"
+                         f"Received: {filename if filename else 'unknown'}"
                          )

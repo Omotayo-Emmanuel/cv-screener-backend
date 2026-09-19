@@ -18,12 +18,11 @@ import functools
 import json
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Set, Optional
-from collections import defaultdict
-
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file
 import spacy
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +170,138 @@ def  extract_skills(text: str, skill_set: Set[str] = None) -> List[str]:
     return sorted(found_skills)
 
 
+# Keyword Density
+def compute_keyword_density(jd_text: str, cv_text: str, keywords: List[str]) -> List[dict]:
+    """
+    Compute the keyword density for a list of keywords in both job description and CV text.
+    
+    Args:
+        jd_text (str): The job description text.
+        cv_text (str): The CV text.
+        keywords (List[str]): List of keywords to compute density for.
+        
+    Returns:
+        List[dict]: A list of dictionaries containing keyword, JD count, CV count, and densities.
+    """
+    jd_lower = jd_text.lower()
+    cv_lower = cv_text.lower()
+    return [
+        {
+            "keyword": kw,
+            "jobDescription": jd_lower.count(kw.lower()),
+            "cv": cv_lower.count(kw.lower()),
+        }
+        for kw in keywords
+    ]
+# Compute Category breakdown
+def compute_category_breakdown(jd_skills: set, cv_skills: set) -> List[dict]:
+    """
+    Compute the breakdown of matched and missing skills by category.
+    """
+    CATEGORIES = {
+        "Technical Skills": {
+            "python", "java", "c++", "javascript", "sql", "html", 
+            "css", "machine learning", "data analysis", "aws", "sql server", 
+            "docker", "kubernetes", "react"
+            },
+        "Soft Skills": {
+            "communication", "leadership", "teamwork", "problem solving", 
+            "adaptability", "time management", "critical thinking"
+            },
+        "Experience": set(), # Placeholder for experience-related skills if needed
+        "Education": set(), 
+        "Tools": {
+            "git", "jira", "confluence", "slack", 
+            "microsoft office", "google workspace", 
+            "figma", "jenkins"}
+    }
+    
+    breakdown = []
+    for cat, ref in CATEGORIES.items():
+        if not ref:
+            breakdown.append({
+                "category": cat,
+                "score": 50.0
+            }) # neutral defaults
+            continue
+        overlap = jd_skills & ref
+        if overlap:
+            hit = len(overlap & cv_skills)
+            breakdown.append({
+                "category": cat,
+                "score": round((hit / len(overlap)) * 100, 2)
+            })
+        else:
+            breakdown.append({
+                "category": cat,
+                "score": 50.0
+            }) 
+    return breakdown
+
+def compute_skill_coverage(jd_skills: set, cv_skills: set) -> List[dict]:
+    
+    """_summary_
+
+    Returns:
+        _type_: _description_
+    """
+    matched = len(jd_skills & cv_skills)
+    total = len(jd_skills) or 1
+    matched_pct = round((matched / total) * 100, 2)
+    missing_pct = round(100-matched_pct, 2)
+    
+    return [
+        {
+            "name": "Matched skills", 
+            "value": matched_pct,
+            "color": "var(--success)"},
+        {
+            "name": "Missing required", 
+            "value": missing_pct,
+            "color": "var(--destructive)"},
+        {
+            "name": "Optional / bonus skills",
+            "value": 0.0,
+            "color": "var(--warning)"
+        },
+    ]
+    
+def generate_strengths(matched: List[str], semantic_score: float) -> List[str]:
+    """
+    Generate a list of strengths based on matched skills and semantic similarity score.
+    
+    Args:
+        matched (List[str]): List of matched skills.
+        semantic_score (float): Semantic similarity score (0-1).
+        
+    Returns:
+        List[str]: List of strengths.
+    """
+    out = []
+    if semantic_score > 0.7:
+        out.append(f"Strong semantic match with job description ({round(semantic_score*100)}%).")
+    if matched:
+        n = len(matched)
+        word = "skill" if n == 1 else "skills"
+        out.append(f"Matches {len(matched)} required {word}: {', '.join(matched)}.")
+    return out
+
+def generate_gaps(missing: List[str]) -> List[str]:
+    """
+    Generate a list of gaps based on missing skills.
+    
+    Args:
+        missing (List[str]): List of missing skills.
+        
+    Returns:
+        List[str]: List of gaps.
+    """
+    if not missing:
+        return []
+    n = len(missing)
+    word = "skill" if n == 1 else "skills"
+    return [f"Missing {n} required {word}: {', '.join(missing)}."]
+
 #   SEMANTIC SIMILARITY
 def compute_semantic_similarity(text1: str, text2: str) -> float:
     """
@@ -198,6 +329,7 @@ def compute_semantic_similarity(text1: str, text2: str) -> float:
 def compute_match(
     cv_text: str,
     job_description: str,
+    candidate_meta: dict = None,
     skill_set: Set[str] = None,
     keyword_weight: float = 0.3, # Weight for the skill match score (0-1).
     semantic_weight: float = 0.7 # Higher weight for semantic similarity
@@ -208,6 +340,7 @@ def compute_match(
     Args:
         cv_text (str): The text of the CV.
         job_description (str): The text of the job description.
+        candidate_meta (dict): Optional dictionary containing candidate metadata.
         skill_set (Set[str]): Optional set of known skills for extraction.
         keyword_weight (float): Weight for the keyword match score (0-1).
         semantic_weight (float): Weight for the semantic similarity score (0-1).
@@ -243,9 +376,27 @@ def compute_match(
     match_score = round(combined * 100, 2) # Scale to 0-100 and round to 2 decimal places
     
     return {
-        "match_score": match_score,
-        "matched_skills": matched,
-        "missing_skills": missing,
-        "semantic_similarity_score": round(semantic_score * 100, 2), # for transparency/debugging
-        "keyword_match_score": round(keyword_overlap * 100, 2) # for transparency/debugging
+        "candidate": {
+            "name": (candidate_meta or {}).get("name", ""),
+            "role": (candidate_meta or {}).get("role", ""),
+            "jobTitle": (candidate_meta or {}).get("jobTitle", ""),
+            "appliedOn": (candidate_meta or {}).get("appliedOn", ""),
+            "overallScore": match_score,
+            "skillsFound": len(matched),
+            "skillsTotal": len(jd_skills),
+            "seniority": "",              # MVP: leave blank
+            "seniorityDetail": "",
+        },
+        "skillCoverage": compute_skill_coverage(jd_skills, cv_skills),
+        "categoryBreakdown": compute_category_breakdown(jd_skills, cv_skills),
+        "keywordDensity": compute_keyword_density(
+            job_description, cv_text, sorted(jd_skills | cv_skills)
+        ),
+        "matchedSkills": matched,
+        "missingSkills": missing,
+        "strengths": generate_strengths(matched, semantic_score),
+        "gaps": generate_gaps(missing),
+        "jobDescriptionKeywords": sorted(jd_skills),
+        "parsedResume": cv_text,
+        "error": None,
     }
